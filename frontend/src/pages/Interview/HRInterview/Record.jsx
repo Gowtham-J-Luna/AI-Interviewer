@@ -9,7 +9,7 @@ import { useMediaRecorder } from "../hooks/useMediaRecorder.js";
 import { useTranscriptAnalysis } from "../hooks/useTranscriptAnalysis.js";
 import { useLiveInterviewCoach } from "../hooks/useLiveInterviewCoach.js";
 import { useWebcamAnalysis } from "../hooks/useWebcamAnalysis.js";
-import { buildAttemptPayload } from "../utils/attemptPayload.js";
+import { buildAttemptPayload } from "../Utils/attemptPayload.js";
 import VideoPlayer from "../Components/VideoPlayer.jsx";
 import QuestionPanel from "../Components/QuestionPanel.jsx";
 import TranscriptPanel from "../Components/TranscriptPanel.jsx";

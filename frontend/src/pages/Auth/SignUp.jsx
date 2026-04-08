@@ -1,0 +1,155 @@
+import React, { useContext, useState } from "react";
+import { SyncLoader } from "react-spinners";
+import { useNavigate } from "react-router-dom";
+import Input from "../Home/Components/Input.jsx";
+import { validateEmail } from "../Home/Utils/helper.js";
+import { UserContext } from "../../context/userContext.jsx";
+import {
+  getFirebaseAuthErrorMessage,
+  signupWithFirebaseEmail,
+} from "../../utils/firebaseAuthHelpers.js";
+
+const SignUp = ({ setCurrentPage }) => {
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [signUpLoading, setSignUpLoading] = useState(false);
+
+  const { updateUser } = useContext(UserContext);
+  const navigate = useNavigate();
+
+  const handleSignUp = async (e) => {
+    e.preventDefault();
+    setSignUpLoading(true);
+    setError("");
+
+    if (!fullName) {
+      setError("Please enter full name.");
+      setSignUpLoading(false);
+      return;
+    }
+
+    if (!validateEmail(email)) {
+      setError("Please enter a valid email address.");
+      setSignUpLoading(false);
+      return;
+    }
+
+    if (!password || password.length < 8) {
+      setError("Please enter a password with at least 8 characters.");
+      setSignUpLoading(false);
+      return;
+    }
+
+    try {
+      const sessionData = await signupWithFirebaseEmail({
+        name: fullName,
+        email,
+        password,
+      });
+
+      const { token } = sessionData;
+      if (token) {
+        localStorage.setItem("token", token);
+        updateUser(sessionData);
+        navigate("/dashboard");
+      }
+    } catch (error) {
+      setError(getFirebaseAuthErrorMessage(error, "Something went wrong. Please try again."));
+    } finally {
+      setSignUpLoading(false);
+    }
+  };
+
+  return (
+    <div
+      className="w-[90vw] md:w-[33vw] p-7 flex flex-col justify-center rounded-lg shadow"
+      style={{
+        background: "linear-gradient(120deg, #ff6a00, #ee0979, #00c3ff, rgb(0,74,25), rgb(0,98,80), #ff6a00)",
+        backgroundSize: "300% 100%",
+        animation: "gradientBG 8s ease-in-out infinite",
+        boxShadow: "0 4px 32px 0 rgba(0,0,0,0.13)",
+        position: "relative",
+        overflow: "hidden",
+      }}
+    >
+      <style>
+        {`
+          @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+          }
+        `}
+      </style>
+      <div
+        style={{
+          background: "rgba(255,255,255,0.90)",
+          borderRadius: "inherit",
+          position: "absolute",
+          inset: 0,
+          zIndex: 0,
+          pointerEvents: "none",
+        }}
+      />
+      <div style={{ position: "relative", zIndex: 1 }}>
+        <h3 className="text-lg font-semibold text-black">Create an Account</h3>
+        <p className="text-xs text-slate-700 mt-[5px] mb-6">
+          Create a free account to save interview sessions and score history.
+        </p>
+
+        <form onSubmit={handleSignUp}>
+          <div className="grid grid-cols-1 md:grid-cols-1 gap-2">
+            <Input
+              value={fullName}
+              onChange={({ target }) => setFullName(target.value)}
+              label="Full Name"
+              placeholder="Enter your full name"
+              type="text"
+            />
+
+            <Input
+              value={email}
+              onChange={({ target }) => setEmail(target.value)}
+              label="Email Address"
+              placeholder="Enter your email address"
+              type="text"
+            />
+
+            <Input
+              value={password}
+              onChange={({ target }) => setPassword(target.value)}
+              label="Password"
+              placeholder="Min 8 Characters"
+              type="password"
+            />
+          </div>
+
+          {error && <p className="text-red-500 text-xs pb-2.5">{error}</p>}
+
+          <button type="submit" className="btn-primary" disabled={signUpLoading}>
+            <div className="flex items-center justify-center h-6">
+              {signUpLoading ? <SyncLoader color="white" size={8} speedMultiplier={0.8} /> : "SIGN UP"}
+            </div>
+          </button>
+
+          <p className="text-[13px] text-slate-800 mt-3">
+            Already have an account?{" "}
+            <button
+              type="button"
+              className="font-medium text-primary underline cursor-pointer"
+              onClick={() => {
+                setCurrentPage("login");
+              }}
+            >
+              Login
+            </button>
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+export default SignUp;

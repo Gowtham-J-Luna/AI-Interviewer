@@ -1,0 +1,187 @@
+const express = require("express");
+const router = express.Router();
+const User = require("../models/User");
+const Session = require("../models/Session");
+const Question = require("../models/Question");
+
+// Middleware to check admin code (can be replaced with JWT later)
+// For now, we trust the frontend to send a valid request if they have the code
+// Ideally, you should have a middleware here.
+
+// GET /analytics
+router.get("/analytics", async (req, res) => {
+    try {
+        const totalUsers = await User.countDocuments();
+        const totalSessions = await Session.countDocuments();
+        const totalQuestions = await Question.countDocuments();
+
+        // Popular Topics (Simple aggregation from Sessions)
+        const popularTopics = await Session.aggregate([
+            { $group: { _id: "$topicsToFocus", count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+            { $limit: 10 }
+        ]);
+
+        // Completion Rate (Sessions with endTime vs Total Sessions)
+        const completedSessions = await Session.countDocuments({ endTime: { $exists: true, $ne: null } });
+        const completionRate = totalSessions > 0 ? ((completedSessions / totalSessions) * 100).toFixed(1) : 0;
+
+        // Users Joined last 30 days for retention graph
+        const thirtyDaysAgo = new Date(new Date().setDate(new Date().getDate() - 30));
+        const newUsers = await User.aggregate([
+            { $match: { createdAt: { $gte: thirtyDaysAgo } } },
+            {
+                $group: {
+                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                    count: { $sum: 1 }
+                }
+            },
+            { $sort: { _id: 1 } }
+        ]);
+
+        res.json({
+            totalUsers,
+            totalSessions,
+            totalQuestions,
+            popularTopics,
+            completionRate,
+            newUsers
+        });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// POST /users/:id/ban
+router.post("/users/:id/ban", async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id);
+        if (!user) return res.status(404).json({ message: "User not found" });
+
+        user.isBanned = !user.isBanned;
+        await user.save();
+        res.json({ message: `User ${user.isBanned ? "banned" : "unbanned"} successfully`, isBanned: user.isBanned });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// POST /broadcast
+router.post("/broadcast", async (req, res) => {
+    const { subject, message, targetUserIds } = req.body;
+
+    if (!subject || !message) {
+        return res.status(400).json({ message: "Subject and message are required" });
+    }
+
+    try {
+        let usersToNotify;
+        const Notification = require("../models/Notification"); // Lazy load
+        const Broadcast = require("../models/Broadcast"); // Lazy load
+
+        if (targetUserIds && targetUserIds.length > 0) {
+            // Send to specific users
+            usersToNotify = await User.find({ _id: { $in: targetUserIds } }).select("_id");
+        } else {
+            // Send to ALL users
+            usersToNotify = await User.find({}).select("_id");
+        }
+
+        if (usersToNotify.length === 0) {
+            return res.status(404).json({ message: "No users found to broadcast to." });
+        }
+
+        // Create notifications in bulk
+        const notifications = usersToNotify.map(user => ({
+            userId: user._id,
+            title: subject,
+            message: message,
+            type: "info"
+        }));
+
+        await Notification.insertMany(notifications);
+
+        // Save Broadcast History
+        const newBroadcast = new Broadcast({
+            subject,
+            message,
+            targetAudience: (targetUserIds && targetUserIds.length > 0) ? "SELECTED" : "ALL",
+            recipientCount: usersToNotify.length,
+            // sentBy: req.user._id // TODO: Add this when we have admin auth context fully wired
+        });
+        await newBroadcast.save();
+
+        res.json({ message: `Broadcast sent successfully to ${notifications.length} users.` });
+
+    } catch (error) {
+        res.status(500).json({ message: "Failed to send broadcast" });
+    }
+});
+
+// GET /broadcasts (History)
+router.get("/broadcasts", async (req, res) => {
+    try {
+        const Broadcast = require("../models/Broadcast");
+        const broadcasts = await Broadcast.find()
+            .sort({ createdAt: -1 })
+            .limit(50); // Limit to last 50 for performance
+        res.json(broadcasts);
+    } catch (error) {
+        res.status(500).json({ message: "Failed to fetch broadcast history" });
+    }
+});
+
+
+
+
+// --- TOAST MANAGEMENT ---
+
+// GET /toasts
+router.get("/toasts", async (req, res) => {
+    try {
+        const Toast = require("../models/Toast");
+        const toasts = await Toast.find().sort({ order: 1 });
+        res.json(toasts);
+    } catch (error) {
+        res.status(500).json({ message: "Failed to fetch toasts" });
+    }
+});
+
+// POST /toasts
+router.post("/toasts", async (req, res) => {
+    try {
+        const Toast = require("../models/Toast");
+        const { message, order, delay, isActive } = req.body;
+        const newToast = new Toast({ message, order, delay, isActive });
+        await newToast.save();
+        res.status(201).json(newToast);
+    } catch (error) {
+        res.status(500).json({ message: "Failed to create toast" });
+    }
+});
+
+// PUT /toasts/:id
+router.put("/toasts/:id", async (req, res) => {
+    try {
+        const Toast = require("../models/Toast");
+        const updatedToast = await Toast.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        if (!updatedToast) return res.status(404).json({ message: "Toast not found" });
+        res.json(updatedToast);
+    } catch (error) {
+        res.status(500).json({ message: "Failed to update toast" });
+    }
+});
+
+// DELETE /toasts/:id
+router.delete("/toasts/:id", async (req, res) => {
+    try {
+        const Toast = require("../models/Toast");
+        const deletedToast = await Toast.findByIdAndDelete(req.params.id);
+        if (!deletedToast) return res.status(404).json({ message: "Toast not found" });
+        res.json({ message: "Toast deleted successfully" });
+    } catch (error) {
+        res.status(500).json({ message: "Failed to delete toast" });
+    }
+});
+
+module.exports = router;

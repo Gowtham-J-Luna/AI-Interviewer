@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import axiosInstance from "../../../utils/axiosInstance.js";
 import { API_PATHS } from "../../../constants/apiPaths.js";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -37,6 +37,15 @@ const getMergedTranscript = (transcript = "", interimTranscript = "") =>
 const getRequestErrorMessage = (error, fallbackMessage) =>
   error?.response?.data?.message || error?.message || fallbackMessage;
 
+const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const formatDuration = (durationMs = 0) => {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+};
+
 const SessionInterview = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -51,6 +60,10 @@ const SessionInterview = () => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [responsesByQuestion, setResponsesByQuestion] = useState({});
   const [isSavingAttempt, setIsSavingAttempt] = useState(false);
+  const [interviewStarted, setInterviewStarted] = useState(false);
+  const [isPreparingInterview, setIsPreparingInterview] = useState(false);
+  const [recordingTimerMs, setRecordingTimerMs] = useState(0);
+  const [recordingStartedAt, setRecordingStartedAt] = useState(null);
 
   useEffect(() => {
     const fetchSessions = async () => {
@@ -90,6 +103,8 @@ const SessionInterview = () => {
       setSessionQuestions([]);
       setCurrentQuestion("");
       setResponsesByQuestion({});
+      setInterviewStarted(false);
+      setRecordingStartedAt(null);
       return;
     }
 
@@ -105,10 +120,14 @@ const SessionInterview = () => {
         setSessionQuestions(questions);
         setCurrentQuestion(questions.length > 0 ? questions[0] : "");
         setResponsesByQuestion({});
+        setInterviewStarted(false);
+        setRecordingStartedAt(null);
       } catch (err) {
         setSelectedSessionData(null);
         setSessionQuestions([]);
         setCurrentQuestion("");
+        setInterviewStarted(false);
+        setRecordingStartedAt(null);
       }
     };
 
@@ -124,6 +143,8 @@ const SessionInterview = () => {
     audioOnly,
     showAudioOnlyNotice,
     hasAttemptedMediaAccess,
+    deviceAvailability,
+    requestMedia,
     handleMicToggle,
     handleCameraToggle,
     stopAllMediaTracks,
@@ -139,6 +160,7 @@ const SessionInterview = () => {
     accuracy,
     language,
     error: speechError,
+    stopSpeechRecognition,
     clearTranscript,
     downloadTranscript,
     correctTranscript,
@@ -148,7 +170,8 @@ const SessionInterview = () => {
     manualRestart,
   } = useSpeechRecognition(micOn);
 
-  const { isRecording, recordedChunks, startRecording, stopRecording } = useMediaRecorder(videoRef);
+  const { isRecording, recordedChunks, startRecording, stopRecording, resetRecording } =
+    useMediaRecorder(videoRef);
 
   const {
     analysis,
@@ -173,15 +196,66 @@ const SessionInterview = () => {
     liveVoiceMetrics,
   });
 
+  const questionIndex = useMemo(
+    () => Math.max(0, sessionQuestions.findIndex((question) => question === currentQuestion)),
+    [sessionQuestions, currentQuestion]
+  );
+  const recordingDurationLabel = recordingStartedAt ? formatDuration(recordingTimerMs) : "";
+
   useEffect(() => {
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = "auto";
     return () => {
       document.body.style.overflow = originalOverflow;
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
     };
   }, []);
 
+  useEffect(() => {
+    if (!isRecording || !recordingStartedAt) {
+      setRecordingTimerMs(0);
+      return undefined;
+    }
+
+    const interval = window.setInterval(() => {
+      setRecordingTimerMs(Date.now() - recordingStartedAt);
+    }, 500);
+
+    return () => window.clearInterval(interval);
+  }, [isRecording, recordingStartedAt]);
+
+  const speakQuestion = useCallback(
+    (question, options = {}) => {
+      if (typeof window === "undefined" || !window.speechSynthesis || !question) {
+        return;
+      }
+
+      stopSpeechRecognition();
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(
+        options.includeIntro ? `Session interview starting. First question. ${question}` : question
+      );
+      utterance.lang = language || "en-US";
+      utterance.rate = 0.95;
+      utterance.pitch = 1;
+      utterance.onend = () => {
+        if (micOn && speechSupported) {
+          window.setTimeout(() => {
+            manualRestart();
+          }, 350);
+        }
+      };
+      window.speechSynthesis.speak(utterance);
+    },
+    [language, manualRestart, micOn, speechSupported, stopSpeechRecognition]
+  );
+
   const handleNavigation = (path) => {
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
     stopAllMediaTracks();
     navigate(path);
   };
@@ -195,7 +269,7 @@ const SessionInterview = () => {
     }
   };
 
-  const mergeCurrentResponse = () => {
+  const mergeCurrentResponse = useCallback(() => {
     const normalizedTranscript = getMergedTranscript(transcript, interimTranscript);
     if (!currentQuestion || !normalizedTranscript) {
       return responsesByQuestion;
@@ -213,7 +287,7 @@ const SessionInterview = () => {
 
     setResponsesByQuestion(nextResponses);
     return nextResponses;
-  };
+  }, [currentQuestion, elapsedMs, interimTranscript, liveVoiceMetrics, responsesByQuestion, transcript]);
 
   const handleNewQuestion = (newQuestion) => {
     mergeCurrentResponse();
@@ -221,6 +295,61 @@ const SessionInterview = () => {
     setTranscript("");
     setInterimTranscript("");
     clearAnalysis();
+
+    if (interviewStarted) {
+      window.setTimeout(() => {
+        speakQuestion(newQuestion);
+      }, 350);
+    }
+  };
+
+  const handleStartInterview = async () => {
+    if (!currentQuestion) {
+      toast.error("No question is loaded yet.");
+      return;
+    }
+
+    setIsPreparingInterview(true);
+    setResponsesByQuestion({});
+    clearTranscript();
+    clearAnalysis();
+    resetRecording();
+    setInterviewStarted(false);
+
+    try {
+      let mediaReady = await requestMedia({ wantsAudio: true, wantsVideo: true });
+
+      if (!mediaReady && deviceAvailability.hasAudioInput && !deviceAvailability.hasVideoInput) {
+        mediaReady = await requestMedia({ wantsAudio: true, wantsVideo: false });
+        if (mediaReady) {
+          toast.success("Camera not detected, so this run will use audio coaching without eye-contact scoring.");
+        }
+      }
+
+      if (!mediaReady) {
+        toast.error("Please allow camera and microphone access before starting the interview.");
+        return;
+      }
+
+      await wait(700);
+      const recordingStarted = await startRecording();
+      if (!recordingStarted) {
+        toast.error("Interview started, but the session recording could not begin. Check media permissions and try again.");
+      }
+
+      setRecordingStartedAt(recordingStarted ? Date.now() : null);
+      setInterviewStarted(true);
+
+      window.setTimeout(() => {
+        speakQuestion(currentQuestion, { includeIntro: true });
+      }, 900);
+
+      toast.success("Session interview started. Listen to the prompt, then begin your answer.");
+    } catch (error) {
+      toast.error("Failed to start the interview flow.");
+    } finally {
+      setIsPreparingInterview(false);
+    }
   };
 
   const handleFinishAndSave = async () => {
@@ -235,6 +364,11 @@ const SessionInterview = () => {
     setIsSavingAttempt(true);
 
     try {
+      if (isRecording) {
+        await stopRecording();
+      }
+      setRecordingStartedAt(null);
+
       const payload = buildAttemptPayload({
         sessionId: selectedSessionData?._id || null,
         sessionType: selectedSessionData?.isResumeSession ? "resume-session" : "session",
@@ -375,9 +509,6 @@ const SessionInterview = () => {
               micOn={micOn}
               handleMicToggle={handleMicToggleWithRestart}
               handleCameraToggle={handleCameraToggle}
-              isRecording={isRecording}
-              startRecording={startRecording}
-              stopRecording={stopRecording}
               webcamPrompts={webcamMetrics?.prompts}
               eyeContactRate={webcamMetrics?.eyeContactRate}
               stressScore={webcamMetrics?.stressScore}
@@ -386,6 +517,9 @@ const SessionInterview = () => {
               trackingConfidence={webcamMetrics?.trackingConfidence}
               calibrationProgress={webcamMetrics?.calibrationProgress}
               calibrated={webcamMetrics?.calibrated}
+              interviewStarted={interviewStarted}
+              isRecording={isRecording}
+              recordingDurationLabel={recordingDurationLabel}
             />
 
             <div className="flex flex-col flex-[0.9] gap-6 min-h-[350px]">
@@ -395,6 +529,12 @@ const SessionInterview = () => {
                 setTranscript={setTranscript}
                 setInterimTranscript={setInterimTranscript}
                 questions={sessionQuestions}
+                interviewStarted={interviewStarted}
+                isPreparingInterview={isPreparingInterview}
+                onStartInterview={handleStartInterview}
+                onRepeatQuestion={() => speakQuestion(currentQuestion)}
+                questionIndex={questionIndex}
+                totalQuestions={sessionQuestions.length}
               />
 
               <TranscriptPanel

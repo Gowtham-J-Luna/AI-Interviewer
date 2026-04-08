@@ -25,45 +25,70 @@ const {
 const app = express();
 const server = http.createServer(app);
 
+const explicitAllowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:5174",
+  "https://ai-interviewer.lsc-crm.in",
+  "https://www.ai-interviewer.lsc-crm.in",
+  "https://ai-interviewer-backend.lsc-crm.in",
+];
+
+const envAllowedOrigins = [
+  process.env.FRONTEND_URL,
+  process.env.CLIENT_URL,
+  process.env.CLIENT_ORIGIN,
+  process.env.BACKEND_URL,
+]
+  .flatMap((value) => (value ? value.split(",") : []))
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+const allowedOriginPatterns = [
+  /\.vercel\.app$/,
+  /\.netlify\.app$/,
+  /\.onrender\.com$/,
+  /^http:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}$/,
+];
+
+const allowedOrigins = [...new Set([...explicitAllowedOrigins, ...envAllowedOrigins])];
+
+const isOriginAllowed = (origin = "") =>
+  allowedOrigins.includes(origin) || allowedOriginPatterns.some((pattern) => pattern.test(origin));
+
+const corsOriginHandler = (origin, callback) => {
+  // Allow server-to-server requests and direct health checks without an Origin header.
+  if (!origin) {
+    return callback(null, true);
+  }
+
+  if (isOriginAllowed(origin)) {
+    return callback(null, true);
+  }
+
+  return callback(new Error(`CORS blocked for origin: ${origin}`));
+};
+
+const corsOptions = {
+  origin: corsOriginHandler,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+  optionsSuccessStatus: 204,
+};
+
 const io = new Server(server, {
   cors: {
-    origin: [
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "http://127.0.0.1:5173",
-      "http://127.0.0.1:5174",
-      "https://AI Interviewerapp.vercel.app",
-      "https://AI Interviewer.vercel.app",
-      /\.vercel\.app$/,
-      /\.netlify\.app$/,
-      /\.onrender\.com$/,
-      /^http:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}$/
-    ],
+    origin: corsOriginHandler,
     methods: ["GET", "POST"],
     credentials: true
   }
 });
 
 // Middleware to handle CORS
-app.use(
-  cors({
-    origin: [
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "http://127.0.0.1:5173",
-      "http://127.0.0.1:5174",
-      "https://AI Interviewerapp.vercel.app",
-      "https://AI Interviewer.vercel.app",
-      /\.vercel\.app$/,
-      /\.netlify\.app$/,
-      /\.onrender\.com$/,
-      /^http:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}$/
-    ],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
-  })
-);
+app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
 
 connectDB();
 

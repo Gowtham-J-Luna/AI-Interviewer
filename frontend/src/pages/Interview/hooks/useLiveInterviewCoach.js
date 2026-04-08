@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { buildLiveVoiceMetrics } from "../utils/liveInterviewMetrics.js";
+import { buildLiveVoiceMetrics } from "../Utils/liveInterviewMetrics.js";
 
 export const useLiveInterviewCoach = ({
   transcript,
@@ -13,11 +13,13 @@ export const useLiveInterviewCoach = ({
   const [longPauseCount, setLongPauseCount] = useState(0);
   const [lastSpeechAt, setLastSpeechAt] = useState(Date.now());
   const startedAtRef = useRef(null);
+  const hasSpeechStartedRef = useRef(false);
   const pauseCountedRef = useRef(false);
   const combinedLengthRef = useRef(0);
 
   useEffect(() => {
     startedAtRef.current = null;
+    hasSpeechStartedRef.current = false;
     setElapsedMs(0);
     setLongPauseCount(0);
     setLastSpeechAt(Date.now());
@@ -26,15 +28,12 @@ export const useLiveInterviewCoach = ({
   }, [resetKey]);
 
   useEffect(() => {
-    if (micOn && !startedAtRef.current) {
-      startedAtRef.current = Date.now();
-      setLastSpeechAt(Date.now());
-    }
-  }, [micOn]);
-
-  useEffect(() => {
     const combined = `${transcript} ${interimTranscript}`.trim();
     if (combined.length !== combinedLengthRef.current) {
+      if (combined.length > 0 && !hasSpeechStartedRef.current) {
+        hasSpeechStartedRef.current = true;
+        startedAtRef.current = Date.now();
+      }
       combinedLengthRef.current = combined.length;
       setLastSpeechAt(Date.now());
       pauseCountedRef.current = false;
@@ -42,7 +41,7 @@ export const useLiveInterviewCoach = ({
   }, [transcript, interimTranscript]);
 
   useEffect(() => {
-    if (!startedAtRef.current) {
+    if (!micOn || !startedAtRef.current || !hasSpeechStartedRef.current) {
       return undefined;
     }
 

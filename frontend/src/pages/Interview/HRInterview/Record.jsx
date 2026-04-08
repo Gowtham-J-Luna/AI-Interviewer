@@ -140,6 +140,7 @@ const Record = () => {
     accuracy,
     language,
     error: speechError,
+    stopSpeechRecognition,
     clearTranscript,
     downloadTranscript,
     correctTranscript,
@@ -213,6 +214,7 @@ const Record = () => {
         return;
       }
 
+      stopSpeechRecognition();
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(
         options.includeIntro ? `Interview starting. First question. ${question}` : question
@@ -220,9 +222,16 @@ const Record = () => {
       utterance.lang = language || "en-US";
       utterance.rate = 0.95;
       utterance.pitch = 1;
+      utterance.onend = () => {
+        if (micOn && speechSupported) {
+          window.setTimeout(() => {
+            manualRestart();
+          }, 350);
+        }
+      };
       window.speechSynthesis.speak(utterance);
     },
-    [language]
+    [language, manualRestart, micOn, speechSupported, stopSpeechRecognition]
   );
 
   const handleNavigation = (path) => {
@@ -312,12 +321,6 @@ const Record = () => {
 
       setRecordingStartedAt(recordingStarted ? Date.now() : null);
       setInterviewStarted(true);
-
-      if (speechSupported) {
-        window.setTimeout(() => {
-          manualRestart();
-        }, 1200);
-      }
 
       window.setTimeout(() => {
         speakQuestion(currentQuestion, { includeIntro: true });
